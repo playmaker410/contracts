@@ -571,3 +571,24 @@ jobs:
         with:
           name: fuzz-artifacts
           path: stellar/stealth-sender/fuzz/artifacts/
+
+  conformance:
+    needs: changes
+    if: needs.changes.outputs.evm == 'true' || needs.changes.outputs.stellar == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: evm
+      - run: npx hardhat test test/conformance.test.ts
+        working-directory: evm
+      - run: npm ci
+        working-directory: evm/subgraph
+      - run: npm run test -- tests/conformance.test.ts
+        working-directory: evm/subgraph
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --package integration-tests --test conformance
+        working-directory: stellar
