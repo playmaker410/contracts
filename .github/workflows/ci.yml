@@ -587,7 +587,7 @@ jobs:
         working-directory: evm
       - run: npm ci
         working-directory: evm/subgraph
-      - run: npm run test -- tests/conformance.test.ts
+      - run: npm run test -- conformance
         working-directory: evm/subgraph
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --package integration-tests --test conformance
