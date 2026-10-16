@@ -33,6 +33,11 @@ const CONTRACTS: ContractMetadata[] = [
     envVar: 'STEALTH_SENDER_CONTRACT_ID',
   },
   {
+    crateName: 'stealth-batch-sender',
+    wasmName: 'stealth_batch_sender.wasm',
+    envVar: 'STEALTH_BATCH_SENDER_CONTRACT_ID',
+  },
+  {
     crateName: 'wraith-names',
     wasmName: 'wraith_names.wasm',
     envVar: 'WRAITH_NAMES_CONTRACT_ID',
@@ -232,13 +237,17 @@ async function main() {
     console.log();
   }
 
-  // Create global index.ts file re-exporting all clients
+  // Create global index.ts file re-exporting all clients.
+  //
+  // Keep this byte-for-byte deterministic: CI regenerates the bindings and
+  // fails the PR on any diff, so a timestamp here would make every run look
+  // like drift.
   const indexContent = `// Auto-generated Stellar TypeScript bindings re-exports
-// Generated on ${new Date().toISOString()}
 
 export * as StealthAnnouncer from './stealth-announcer/src/index';
 export * as StealthRegistry from './stealth-registry/src/index';
 export * as StealthSender from './stealth-sender/src/index';
+export * as StealthBatchSender from './stealth-batch-sender/src/index';
 export * as WraithNames from './wraith-names/src/index';
 `;
 

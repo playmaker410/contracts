@@ -30,6 +30,17 @@ export PORT=9090
 # Polling interval for new events (milliseconds)
 export POLL_INTERVAL_MS=5000
 
+# RPC work bounds
+export RPC_TIMEOUT_MS=10000          # abort a single request after this long
+export RPC_MAX_ATTEMPTS=4            # total attempts, including the first
+export RPC_RETRY_BASE_MS=250         # jittered backoff base
+export RPC_RETRY_MAX_MS=5000         # jittered backoff ceiling
+export RPC_MAX_RESPONSE_BYTES=1048576 # hard cap on response bytes read
+
+# Health thresholds
+export HEALTH_STALE_AFTER_MS=15000   # default: 3 * POLL_INTERVAL_MS
+export HEALTH_FAILURE_THRESHOLD=3    # consecutive total failures -> unhealthy
+
 # Contract addresses to monitor
 export STEALTH_REGISTRY_ADDRESS="CC..."
 export STEALTH_SENDER_ADDRESS="CC..."
@@ -41,7 +52,9 @@ export GOVERNANCE_ADDRESS="CC..."
 ```
 
 Any address left unset is skipped, so the indexer can be pointed at a subset of
-the deployment.
+the deployment. Leaving **every** address unset is a configuration error: the
+poll fails and `/health` reports `degraded`/`unhealthy` instead of a healthy
+no-op.
 
 ## Usage
 
@@ -70,6 +83,54 @@ Health check endpoint:
 ```
 http://localhost:9090/health
 ```
+
+The health endpoint reports `healthy`, `degraded`, or `unhealthy`:
+
+- `healthy` — the most recent poll succeeded within `HEALTH_STALE_AFTER_MS`
+  with no failures.
+- `degraded` — a recent poll was stale or some contracts failed; the process is
+  still running. Responds `200`.
+- `unhealthy` — `HEALTH_FAILURE_THRESHOLD` consecutive total failures (or no
+  success yet after the stale window). Responds `503`.
+
+```json
+{
+  "status": "degraded",
+  "stale": false,
+  "uptimeMs": 42000,
+  "pollIntervalMs": 5000,
+  "rpcHost": "https://futurenet.sorobanrpc.com",
+  "lastSuccessAt": 1699999999999,
+  "lastError": { "message": "RpcTimeoutError: RPC getEvents timed out after 10000ms", "at": 1700000000000 },
+  "consecutiveFailures": 1,
+  "polls": { "total": 12, "failed": 3, "skipped": 0, "lastDurationMs": 82 }
+}
+```
+
+The response only ever carries the redacted RPC host (`scheme://host`) and a
+truncated error summary — never the full URL, credentials, or a provider body.
+
+## Resilience
+
+- **Abortable timeouts.** Each RPC request runs under an `AbortController` with
+  `RPC_TIMEOUT_MS`; a timeout aborts and releases the socket rather than leaving
+  it dangling.
+- **Bounded retries with jitter.** Transient failures (network errors, HTTP 429,
+  5xx, JSON-RPC internal errors) are retried up to `RPC_MAX_ATTEMPTS` with
+  full-jitter backoff capped at `RPC_RETRY_MAX_MS`. Client errors are not
+  retried.
+- **No overlapping polls.** The polling loop waits for the previous poll to
+  finish before scheduling the next one, and a concurrent manual run is skipped
+  and counted in `polls.skipped`. A slow poll therefore delays the next tick
+  instead of stacking RPC work.
+- **Bounded provider bodies.** Responses are read up to
+  `RPC_MAX_RESPONSE_BYTES` and then cut off; error messages and log lines are
+  truncated.
+- **Fail closed on malformed responses.** A 2xx body that is not a valid
+  JSON-RPC 2.0 envelope (missing/wrong `id`, no `result` or `error`, both) or a
+  `getEvents` result without a numeric `latestLedger` and an `events` array is
+  rejected as a poll failure. A malformed response never becomes a successful
+  empty page, so metrics cannot silently stop while `/health` stays healthy.
 
 ## Metrics Exported
 
@@ -152,6 +213,10 @@ The indexer:
 4. Aggregates metrics in memory (counters increment, gauges set absolute values)
 5. Exposes aggregated metrics via Prometheus text format
 
+Transport concerns are isolated in `rpc-client.js` (timeout, retry, response
+cap), scheduling and counters in `runtime.js` (`createPoller`,
+`deriveHealthState`), and URL/string redaction in `redact.js`.
+
 ## Event Format
 
 The indexer expects events in the WraithMetricEvent format:
@@ -169,6 +234,14 @@ See `stellar/METRICS.md` for the full specification, including the complete
 symbol table.
 
 ## Testing
+
+### Unit tests
+
+```bash
+npm test        # node --test; covers timeout/abort, retry+jitter, response cap,
+                # malformed-response rejection, empty-config failure, overlap
+                # prevention, health states, and redaction
+```
 
 ### Verify the dashboard against a synthetic event stream
 
